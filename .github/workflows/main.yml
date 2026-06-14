@@ -1,4 +1,4 @@
-name: Build OnePlus Kernel Module
+name: Build OnePlus SM8650 Kernel Module
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repo
+    - name: Checkout source
       uses: actions/checkout@v4
 
     - name: Install dependencies
@@ -34,20 +34,22 @@ jobs:
         clang --version
         ld.lld --version
 
-    - name: Prepare kernel build system
+    - name: Prepare kernel properly (FIXED)
       run: |
         make ARCH=arm64 O=out defconfig || true
-        make ARCH=arm64 O=out modules_prepare || true
+        make ARCH=arm64 O=out prepare
+        make ARCH=arm64 O=out modules_prepare
 
-    - name: Build kernel module
+    - name: Build kernel module (FIXED WAY)
       run: |
-        make ARCH=arm64 O=out M=filetest modules
+        make -C out M=$PWD/filetest modules
 
-    - name: Show output
+    - name: Check output
       run: |
+        find filetest -name "*.ko" || true
         ls -lah filetest || true
 
-    - name: Upload .ko file
+    - name: Upload .ko artifact
       uses: actions/upload-artifact@v4
       with:
         name: hello-ko
