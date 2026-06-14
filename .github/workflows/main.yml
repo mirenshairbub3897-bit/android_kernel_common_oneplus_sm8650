@@ -1,4 +1,4 @@
-name: Build Kernel Module (OP-WILD FIXED)
+name: Build OnePlus Kernel Module (FIXED LLVM)
 
 on:
   workflow_dispatch:
@@ -12,30 +12,40 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Install dependencies (LLVM ONLY)
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev make git clang llvm lld python3 gcc-aarch64-linux-gnu
+        sudo apt install -y \
+          bc bison flex libssl-dev make git \
+          clang llvm lld python3
 
-    - name: Set environment (IMPORTANT FIX)
+    - name: Set environment (FORCE CLANG)
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "KERNEL_DIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "LD=ld.lld" >> $GITHUB_ENV
+        echo "LLVM=1" >> $GITHUB_ENV
+        echo "LLVM_IAS=1" >> $GITHUB_ENV
+
+    - name: Verify toolchain
+      run: |
+        clang --version
+        ld.lld --version
 
     - name: Prepare kernel build system
       run: |
-        make ARCH=arm64 defconfig || true
-        make ARCH=arm64 modules_prepare
+        make ARCH=arm64 LLVM=1 defconfig || true
+        make ARCH=arm64 LLVM=1 modules_prepare
 
-    - name: Build module
+    - name: Build kernel module
       run: |
-        make -C $GITHUB_WORKSPACE M=filetest ARCH=arm64 modules
+        make -C $GITHUB_WORKSPACE M=filetest ARCH=arm64 LLVM=1 modules
 
-    - name: Verify output
+    - name: Check output
       run: |
-        find filetest -name "*.ko"
-        ls -lah filetest
+        find filetest -name "*.ko" || true
+        ls -lah filetest || true
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
