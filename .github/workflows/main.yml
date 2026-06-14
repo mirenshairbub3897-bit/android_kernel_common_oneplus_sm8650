@@ -1,4 +1,4 @@
-name: Build OnePlus SM8650 Module
+name: Build Kernel Module (OP-WILD FIXED)
 
 on:
   workflow_dispatch:
@@ -17,12 +17,11 @@ jobs:
         sudo apt update
         sudo apt install -y bc bison flex libssl-dev make git clang llvm lld python3 gcc-aarch64-linux-gnu
 
-    - name: Setup environment
+    - name: Set environment (IMPORTANT FIX)
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
-        echo "LLVM=1" >> $GITHUB_ENV
-        echo "LLVM_IAS=1" >> $GITHUB_ENV
+        echo "KERNEL_DIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
     - name: Prepare kernel build system
       run: |
@@ -32,6 +31,11 @@ jobs:
     - name: Build module
       run: |
         make -C $GITHUB_WORKSPACE M=filetest ARCH=arm64 modules
+
+    - name: Verify output
+      run: |
+        find filetest -name "*.ko"
+        ls -lah filetest
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
