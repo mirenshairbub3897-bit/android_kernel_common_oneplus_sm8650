@@ -2,8 +2,14 @@ obj-m += hello.o
 
 PWD := $(shell pwd)
 
+# IMPORTANT: kernel identity match (OP-WILD fix)
+EXTRA_CFLAGS += -DLOCALVERSION=\"-OP-WILD\"
+
+KDIR ?= $(KERNEL_DIR)
+KDIR ?= $(shell pwd)/../
+
 all:
-	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
+	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
 clean:
-	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) clean
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
