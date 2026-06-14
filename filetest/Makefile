@@ -1,10 +1,9 @@
 obj-m += hello.o
 
-# kernel build system (important for GitHub Actions)
-KDIR ?= $(PWD)
+PWD := $(shell pwd)
 
 all:
-	$(MAKE) -C $(KDIR) M=$(PWD) modules
+	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) clean
