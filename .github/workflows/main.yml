@@ -1,4 +1,4 @@
-name: Build OnePlus Kernel Module
+name: Build OnePlus SM8650 Module
 
 on:
   workflow_dispatch:
@@ -9,46 +9,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repo
+    - name: Checkout source
       uses: actions/checkout@v4
 
     - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y \
-          bc bison flex libssl-dev make git \
-          clang llvm lld \
-          python3 gcc-aarch64-linux-gnu
+        sudo apt install -y bc bison flex libssl-dev make git clang llvm lld python3 gcc-aarch64-linux-gnu
 
-    - name: Clone kernel source (IMPORTANT FIX)
-      run: |
-        git clone https://github.com/mirenshairbub3897-bit/android_kernel_common_oneplus_sm8650.git kernel
-
-    - name: Set environment
+    - name: Setup environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
         echo "LLVM=1" >> $GITHUB_ENV
         echo "LLVM_IAS=1" >> $GITHUB_ENV
-        echo "KERNEL_DIR=$GITHUB_WORKSPACE/kernel" >> $GITHUB_ENV
 
     - name: Prepare kernel build system
       run: |
-        cd kernel
         make ARCH=arm64 defconfig || true
-        make ARCH=arm64 prepare
         make ARCH=arm64 modules_prepare
 
     - name: Build module
       run: |
-        make -C kernel M=$GITHUB_WORKSPACE/filetest ARCH=arm64 LLVM=1 modules
+        make -C $GITHUB_WORKSPACE M=filetest ARCH=arm64 modules
 
-    - name: Verify output
-      run: |
-        find filetest -name "*.ko"
-        ls -lah filetest
-
-    - name: Upload module
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: hello-ko
