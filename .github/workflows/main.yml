@@ -1,4 +1,4 @@
-name: Build OnePlus Kernel Module (STABLE LLVM FIXED)
+name: Build OnePlus Kernel Module
 
 on:
   workflow_dispatch:
@@ -44,9 +44,14 @@ jobs:
         make clean || true
         make mrproper || true
 
-    - name: Apply defconfig (your device config)
+    - name: Apply defconfig (device config)
       run: |
         make ARCH=arm64 LLVM=1 defconfig
+
+    - name: Disable CONFIG_MODVERSIONS to avoid CRC mismatch
+      run: |
+        scripts/config --disable MODVERSIONS
+        make ARCH=arm64 LLVM=1 olddefconfig
 
     - name: Prepare kernel build system
       run: |
