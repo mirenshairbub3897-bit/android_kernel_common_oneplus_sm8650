@@ -1,16 +1,14 @@
-// bgmi_offset_checker.c (Fixed: use_mm/unuse_mm + copy_from_user, no get_user_pages_remote)
+// bgmi_offset_checker.c (Fixed: access_process_vm, no use_mm/unuse_mm)
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 #include <linux/mm.h>
-#include <linux/highmem.h>
 #include <linux/fs.h>
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/file.h>
-#include <linux/uaccess.h>      // copy_from_user
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("BGMI Dev");
@@ -24,7 +22,7 @@ MODULE_DESCRIPTION("Offset Validator for BGMI (libUE4.so relative)");
 #define OFFSET_PROJECT_WORLD_TO_SCREEN  0xa7212f4
 #define OFFSET_WAS_AVATAR_RECENTLY_RENDERED 0x6b5cce8
 
-// Class offsets (relative to object instance, not base)
+// Class offsets (relative to object instance)
 #define OFFSET_LAST_SUBMIT_TIME            0x484
 #define OFFSET_LAST_RENDER_TIME            0x488
 #define OFFSET_LAST_RENDER_TIME_ON_SCREEN  0x48c
@@ -60,23 +58,20 @@ MODULE_DESCRIPTION("Offset Validator for BGMI (libUE4.so relative)");
 static int pid = -1;
 module_param(pid, int, 0644);
 
-// Safe read using use_mm/unuse_mm + copy_from_user (no get_user_pages_remote)
-static int read_remote_memory(struct mm_struct *mm, unsigned long addr, void *buf, size_t len)
+// Safe read using access_process_vm (exported, works on all kernels)
+static int read_remote_memory(struct task_struct *task, unsigned long addr, void *buf, size_t len)
 {
-    if (!mm || !buf || len == 0 || addr < TASK_SIZE)
+    int ret;
+    if (!task || !buf || len == 0 || addr < TASK_SIZE)
         return -EINVAL;
 
-    use_mm(mm);
-    // copy_from_user safely reads user-space memory from the target process
-    if (copy_from_user(buf, (void __user *)addr, len)) {
-        unuse_mm(mm);
-        return -EFAULT;
-    }
-    unuse_mm(mm);
-    return 0;
+    ret = access_process_vm(task, addr, buf, len, FOLL_FORCE);
+    if (ret == len)
+        return 0;
+    return -EFAULT;
 }
 
-// Find base address of a library (e.g. "libUE4.so") in target process using /proc/pid/maps
+// Find base address of a library (e.g. "libUE4.so") using /proc/pid/maps
 static unsigned long get_lib_base(struct task_struct *task, const char *lib_name)
 {
     struct file *maps_file;
@@ -138,7 +133,6 @@ static void print_int(const char *desc, int val) {
 static int __init bgmi_checker_init(void)
 {
     struct task_struct *task;
-    struct mm_struct *mm;
     unsigned long libue4_base;
     unsigned long gworld, persistent_level, actors_data, actor_count;
     unsigned long first_actor, mesh, root_comp;
@@ -179,12 +173,6 @@ static int __init bgmi_checker_init(void)
     }
     printk(KERN_INFO "[BGMI] libUE4.so base = 0x%lx\n", libue4_base);
 
-    mm = get_task_mm(task);
-    if (!mm) {
-        printk(KERN_ERR "[BGMI] Could not get mm_struct\n");
-        return -EINVAL;
-    }
-
     unsigned long abs_gworld = libue4_base + OFFSET_GWORLD;
     unsigned long abs_vmatrix = libue4_base + OFFSET_VMATRIX;
     unsigned long abs_w2s_func = libue4_base + OFFSET_PROJECT_WORLD_TO_SCREEN;
@@ -192,9 +180,8 @@ static int __init bgmi_checker_init(void)
     printk(KERN_INFO "[BGMI] Testing absolute addresses...\n");
     print_val("Absolute GWorld", abs_gworld);
 
-    if (read_remote_memory(mm, abs_gworld, &gworld, sizeof(gworld))) {
+    if (read_remote_memory(task, abs_gworld, &gworld, sizeof(gworld))) {
         printk(KERN_ERR "[BGMI] FAILED to read GWorld\n");
-        mmput(mm);
         return -EFAULT;
     }
     print_val("GWorld value", gworld);
@@ -203,46 +190,46 @@ static int __init bgmi_checker_init(void)
     }
 
     if (gworld != 0) {
-        if (read_remote_memory(mm, gworld + OFFSET_PERSISTENT_LEVEL, &persistent_level, sizeof(persistent_level))) {
+        if (read_remote_memory(task, gworld + OFFSET_PERSISTENT_LEVEL, &persistent_level, sizeof(persistent_level))) {
             printk(KERN_ERR "[BGMI] FAILED to read PersistentLevel\n");
         } else {
             print_val("PersistentLevel", persistent_level);
             if (persistent_level != 0) {
                 unsigned long count_addr = persistent_level + ACTORS_ARRAY_OFFSET - 0x8;
-                if (read_remote_memory(mm, count_addr, &actor_count, sizeof(actor_count))) {
+                if (read_remote_memory(task, count_addr, &actor_count, sizeof(actor_count))) {
                     printk(KERN_ERR "[BGMI] FAILED to read Actor count\n");
                 } else {
                     print_int("Actor count", (int)actor_count);
                 }
-                if (read_remote_memory(mm, persistent_level + ACTORS_ARRAY_OFFSET, &actors_data, sizeof(actors_data))) {
+                if (read_remote_memory(task, persistent_level + ACTORS_ARRAY_OFFSET, &actors_data, sizeof(actors_data))) {
                     printk(KERN_ERR "[BGMI] FAILED to read Actors data pointer\n");
                 } else {
                     print_val("Actors data pointer", actors_data);
                     if (actor_count > 0 && actor_count < 10000 && actors_data != 0) {
-                        if (read_remote_memory(mm, actors_data, &first_actor, sizeof(first_actor))) {
+                        if (read_remote_memory(task, actors_data, &first_actor, sizeof(first_actor))) {
                             printk(KERN_ERR "[BGMI] FAILED to read first actor\n");
                         } else {
                             print_val("First Actor", first_actor);
                             if (first_actor != 0) {
-                                if (read_remote_memory(mm, first_actor + OFFSET_MESH, &mesh, sizeof(mesh))) {
+                                if (read_remote_memory(task, first_actor + OFFSET_MESH, &mesh, sizeof(mesh))) {
                                     printk(KERN_ERR "[BGMI] FAILED to read Mesh\n");
                                 } else {
                                     print_val("Mesh", mesh);
                                     if (mesh != 0) {
                                         unsigned long lrt;
-                                        if (read_remote_memory(mm, mesh + OFFSET_LAST_RENDER_TIME, &lrt, sizeof(lrt))) {
+                                        if (read_remote_memory(task, mesh + OFFSET_LAST_RENDER_TIME, &lrt, sizeof(lrt))) {
                                             printk(KERN_ERR "[BGMI] FAILED: LastRenderTime\n");
                                         } else {
                                             print_val("LastRenderTime", lrt);
                                         }
                                     }
                                 }
-                                if (read_remote_memory(mm, first_actor + OFFSET_ROOT_COMPONENT, &root_comp, sizeof(root_comp))) {
+                                if (read_remote_memory(task, first_actor + OFFSET_ROOT_COMPONENT, &root_comp, sizeof(root_comp))) {
                                     printk(KERN_ERR "[BGMI] FAILED: RootComponent\n");
                                 } else {
                                     print_val("RootComponent", root_comp);
                                     if (root_comp != 0) {
-                                        if (read_remote_memory(mm, root_comp + OFFSET_POSITION, &position, sizeof(position))) {
+                                        if (read_remote_memory(task, root_comp + OFFSET_POSITION, &position, sizeof(position))) {
                                             printk(KERN_ERR "[BGMI] FAILED: Position\n");
                                         } else {
                                             unsigned int *pos_ints = (unsigned int *)position;
@@ -251,22 +238,22 @@ static int __init bgmi_checker_init(void)
                                         }
                                     }
                                 }
-                                if (read_remote_memory(mm, first_actor + OFFSET_HEALTH, &health, sizeof(health))) {
+                                if (read_remote_memory(task, first_actor + OFFSET_HEALTH, &health, sizeof(health))) {
                                     printk(KERN_ERR "[BGMI] FAILED: Health\n");
                                 } else {
                                     print_int("Health", health);
                                 }
-                                if (read_remote_memory(mm, first_actor + OFFSET_TEAM_ID, &team_id, sizeof(team_id))) {
+                                if (read_remote_memory(task, first_actor + OFFSET_TEAM_ID, &team_id, sizeof(team_id))) {
                                     printk(KERN_ERR "[BGMI] FAILED: TeamID\n");
                                 } else {
                                     print_int("TeamID", (int)team_id);
                                 }
                                 {
                                     unsigned long name_ptr;
-                                    if (read_remote_memory(mm, first_actor + OFFSET_PLAYER_NAME, &name_ptr, sizeof(name_ptr))) {
+                                    if (read_remote_memory(task, first_actor + OFFSET_PLAYER_NAME, &name_ptr, sizeof(name_ptr))) {
                                         printk(KERN_ERR "[BGMI] FAILED: PlayerName pointer\n");
                                     } else if (name_ptr != 0) {
-                                        if (read_remote_memory(mm, name_ptr, name, 31)) {
+                                        if (read_remote_memory(task, name_ptr, name, 31)) {
                                             printk(KERN_ERR "[BGMI] FAILED: PlayerName data\n");
                                         } else {
                                             name[31] = 0;
@@ -274,7 +261,7 @@ static int __init bgmi_checker_init(void)
                                         }
                                     }
                                 }
-                                if (read_remote_memory(mm, first_actor + OFFSET_B_IS_AI, &is_ai, sizeof(is_ai))) {
+                                if (read_remote_memory(task, first_actor + OFFSET_B_IS_AI, &is_ai, sizeof(is_ai))) {
                                     printk(KERN_ERR "[BGMI] FAILED: bIsAI\n");
                                 } else {
                                     printk(KERN_INFO "[BGMI] bIsAI: %s\n", is_ai ? "true (BOT)" : "false (Player)");
@@ -290,33 +277,33 @@ static int __init bgmi_checker_init(void)
         {
             unsigned long game_instance, local_players_array, local_player, player_controller, local_pawn;
             printk(KERN_INFO "[BGMI] --- Testing Local Player chain ---\n");
-            if (read_remote_memory(mm, gworld + OFFSET_UWORLD_OWNING_GAMEINSTANCE, &game_instance, sizeof(game_instance))) {
+            if (read_remote_memory(task, gworld + OFFSET_UWORLD_OWNING_GAMEINSTANCE, &game_instance, sizeof(game_instance))) {
                 printk(KERN_ERR "[BGMI] FAILED: OwningGameInstance\n");
             } else {
                 print_val("GameInstance", game_instance);
                 if (game_instance != 0) {
-                    if (read_remote_memory(mm, game_instance + OFFSET_GAMEINSTANCE_LOCALPLAYERS, &local_players_array, sizeof(local_players_array))) {
+                    if (read_remote_memory(task, game_instance + OFFSET_GAMEINSTANCE_LOCALPLAYERS, &local_players_array, sizeof(local_players_array))) {
                         printk(KERN_ERR "[BGMI] FAILED: LocalPlayers array\n");
                     } else {
                         print_val("LocalPlayers Array", local_players_array);
                         if (local_players_array != 0) {
-                            if (read_remote_memory(mm, local_players_array, &local_player, sizeof(local_player))) {
+                            if (read_remote_memory(task, local_players_array, &local_player, sizeof(local_player))) {
                                 printk(KERN_ERR "[BGMI] FAILED: LocalPlayer[0]\n");
                             } else {
                                 print_val("LocalPlayer[0]", local_player);
                                 if (local_player != 0) {
-                                    if (read_remote_memory(mm, local_player + OFFSET_LOCALPLAYER_PLAYERCONTROLLER, &player_controller, sizeof(player_controller))) {
+                                    if (read_remote_memory(task, local_player + OFFSET_LOCALPLAYER_PLAYERCONTROLLER, &player_controller, sizeof(player_controller))) {
                                         printk(KERN_ERR "[BGMI] FAILED: PlayerController\n");
                                     } else {
                                         print_val("PlayerController", player_controller);
                                         if (player_controller != 0) {
-                                            if (read_remote_memory(mm, player_controller + OFFSET_ACKNOWLEDGED_PAWN, &local_pawn, sizeof(local_pawn))) {
+                                            if (read_remote_memory(task, player_controller + OFFSET_ACKNOWLEDGED_PAWN, &local_pawn, sizeof(local_pawn))) {
                                                 printk(KERN_ERR "[BGMI] FAILED: AcknowledgedPawn\n");
                                             } else {
                                                 print_val("Local Pawn", local_pawn);
                                                 if (local_pawn != 0) {
                                                     unsigned long ltid;
-                                                    if (read_remote_memory(mm, local_pawn + OFFSET_TEAM_ID, &ltid, sizeof(ltid))) {
+                                                    if (read_remote_memory(task, local_pawn + OFFSET_TEAM_ID, &ltid, sizeof(ltid))) {
                                                         printk(KERN_ERR "[BGMI] FAILED: Local TeamID\n");
                                                     } else {
                                                         local_pawn_team_id = ltid;
@@ -338,7 +325,7 @@ static int __init bgmi_checker_init(void)
     printk(KERN_INFO "[BGMI] --- Testing VMatrix & W2S function ---\n");
     {
         unsigned int vmatrix[16];
-        if (read_remote_memory(mm, abs_vmatrix, vmatrix, sizeof(vmatrix))) {
+        if (read_remote_memory(task, abs_vmatrix, vmatrix, sizeof(vmatrix))) {
             printk(KERN_ERR "[BGMI] FAILED to read VMatrix\n");
         } else {
             printk(KERN_INFO "[BGMI] VMatrix first 4 words: 0x%08x 0x%08x 0x%08x 0x%08x\n",
@@ -347,7 +334,7 @@ static int __init bgmi_checker_init(void)
     }
     {
         unsigned char code[8];
-        if (read_remote_memory(mm, abs_w2s_func, code, sizeof(code))) {
+        if (read_remote_memory(task, abs_w2s_func, code, sizeof(code))) {
             printk(KERN_ERR "[BGMI] FAILED to read W2S function code\n");
         } else {
             printk(KERN_INFO "[BGMI] W2S first bytes: %02x %02x %02x %02x ...\n",
@@ -355,7 +342,6 @@ static int __init bgmi_checker_init(void)
         }
     }
 
-    mmput(mm);
     printk(KERN_INFO "[BGMI] Offset check complete. Review dmesg output.\n");
     return 0;
 }
