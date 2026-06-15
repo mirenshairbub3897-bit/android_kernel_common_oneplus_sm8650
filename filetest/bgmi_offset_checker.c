@@ -1,4 +1,4 @@
-// bgmi_offset_checker.c (FIXED: comm length issue, using strncmp)
+// bgmi_offset_checker.c (FIXED: exact process name "com.pubg.imobile")
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -22,7 +22,7 @@ MODULE_DESCRIPTION("Offset Validator for BGMI (libUE4.so relative)");
 #define OFFSET_PROJECT_WORLD_TO_SCREEN  0xa7212f4
 #define OFFSET_WAS_AVATAR_RECENTLY_RENDERED 0x6b5cce8
 
-// Class offsets (relative to object instance)
+// Class offsets
 #define OFFSET_LAST_SUBMIT_TIME            0x484
 #define OFFSET_LAST_RENDER_TIME            0x488
 #define OFFSET_LAST_RENDER_TIME_ON_SCREEN  0x48c
@@ -147,8 +147,8 @@ static int __init bgmi_checker_init(void)
 
     rcu_read_lock();
     for_each_process(task) {
-        // Kernel stores only first 15 chars in comm, so compare first 15 bytes
-        if (strncmp(task->comm, "com.pubg.imobil", 15) == 0) {
+        // Exact match: "com.pubg.imobile" (15 characters fits in comm)
+        if (strcmp(task->comm, "com.pubg.imobile") == 0) {
             pid = task->pid;
             break;
         }
