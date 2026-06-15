@@ -48,11 +48,6 @@ jobs:
       run: |
         make ARCH=arm64 LLVM=1 defconfig
 
-    - name: Disable CONFIG_MODVERSIONS to avoid CRC mismatch
-      run: |
-        scripts/config --disable MODVERSIONS
-        make ARCH=arm64 LLVM=1 olddefconfig
-
     - name: Prepare kernel build system
       run: |
         make ARCH=arm64 LLVM=1 modules_prepare
