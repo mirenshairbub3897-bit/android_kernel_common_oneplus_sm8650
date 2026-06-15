@@ -12,7 +12,7 @@
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("BGMI Dev");
-MODULE_DESCRIPTION("Offset Validator for BGMI (libUE4.so relative)");
+MODULE_DESCRIPTION("Offset Validator for BGMI (libUE4.so relative) - Android Fixed");
 
 // ========== RELATIVE OFFSETS (to libUE4.so base) ==========
 #define OFFSET_GWORLD                   0xe4f28c0
@@ -80,7 +80,7 @@ static unsigned long get_lib_base(struct task_struct *task, const char *lib_name
     unsigned long base = 0;
     loff_t pos = 0;
     ssize_t len;
-    char *line, *p, *saveptr;
+    char *line, *p;
 
     if (!task || !lib_name)
         return 0;
@@ -148,21 +148,45 @@ static int __init bgmi_checker_init(void)
     char name[32] = {0};
     int is_ai;
     unsigned long local_pawn_team_id = 0;
+    int found = 0;
+    int debug_count = 0;
 
     pr_info("[BGMI] Module loaded – searching for BGMI process...\n");
 
     rcu_read_lock();
     for_each_process(task) {
-        // Exact match: "com.pubg.imobile" (15 chars + null = 16 fits in TASK_COMM_LEN)
+        // Android-specific process name handling:
+        // 1. Exact match (full name)
+        // 2. Truncated match (Android may truncate to 15 chars)
+        // 3. Partial match for debugging
+        
         if (strcmp(task->comm, "com.pubg.imobile") == 0) {
             pid = task->pid;
+            found = 1;
             break;
+        }
+        
+        // Check for truncated name (first 15 chars match + null)
+        if (strncmp(task->comm, "com.pubg.imobil", 15) == 0 && 
+            task->comm[15] == '\0') {
+            pid = task->pid;
+            found = 1;
+            break;
+        }
+        
+        // Debug: Show processes with "pubg" in name (limited to 5)
+        if (strstr(task->comm, "pubg") != NULL && debug_count < 5) {
+            pr_info("[BGMI] Debug: Process with 'pubg' -> '%s' (pid=%d)\n", 
+                   task->comm, task->pid);
+            debug_count++;
         }
     }
     rcu_read_unlock();
 
-    if (pid == -1) {
-        pr_err("[BGMI] Process 'com.pubg.imobile' not found.\n");
+    if (!found) {
+        pr_err("[BGMI] Process 'com.pubg.imobile' not found!\n");
+        pr_err("[BGMI] Check debug output above for processes with 'pubg' in name\n");
+        pr_err("[BGMI] Tip: Verify BGMI is running with 'ps | grep pubg' in adb shell\n");
         return -ENOENT;
     }
     pr_info("[BGMI] Found process PID = %d\n", pid);
