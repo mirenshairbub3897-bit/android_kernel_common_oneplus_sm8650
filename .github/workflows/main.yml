@@ -1,4 +1,4 @@
-name: Build OnePlus Kernel Module (LLVM FIXED)
+name: Build OnePlus Kernel Module (AUTO FIX PGO + LLVM)
 
 on:
   workflow_dispatch:
@@ -12,50 +12,53 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v4
 
-    - name: Install dependencies (LLVM toolchain)
+    - name: Install dependencies
       run: |
         sudo apt update
-        sudo apt install -y \
-          bc bison flex libssl-dev make git \
-          clang llvm lld python3 curl wget zip
+        sudo apt install -y bc bison flex libssl-dev make git clang llvm lld python3
 
-    - name: Set environment (Android Kernel LLVM)
+    - name: Set environment
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
         echo "LLVM=1" >> $GITHUB_ENV
         echo "LLVM_IAS=1" >> $GITHUB_ENV
-        echo "CC=clang" >> $GITHUB_ENV
+
+    - name: Fix PGO config automatically (IMPORTANT)
+      run: |
+        echo "Disabling PGO if enabled..."
+        find . -type f -name "*defconfig*" -o -name "config*" | while read file; do
+          sed -i 's/CONFIG_PGO=y/CONFIG_PGO=n/g' "$file" || true
+        done
 
     - name: Verify toolchain
       run: |
         clang --version
         ld.lld --version
 
-    - name: Clean kernel tree
+    - name: Safe clean (avoid PGO crash)
       run: |
-        make clean
+        make clean || true
         make mrproper || true
 
-    - name: Apply defconfig (YOUR DEVICE CONFIG)
+    - name: Apply defconfig
       run: |
         make ARCH=arm64 LLVM=1 defconfig
 
-    - name: Prepare kernel build system
+    - name: Prepare build system
       run: |
         make ARCH=arm64 LLVM=1 modules_prepare
 
-    - name: Build kernel modules
+    - name: Build modules
       run: |
         make -j$(nproc) ARCH=arm64 LLVM=1 M=filetest modules
 
-    - name: Verify output
+    - name: Check output
       run: |
-        echo "Checking .ko files..."
-        find filetest -type f -name "*.ko" || true
+        find filetest -name "*.ko" || true
         ls -lah filetest || true
 
-    - name: Upload kernel modules
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: kernel-modules
