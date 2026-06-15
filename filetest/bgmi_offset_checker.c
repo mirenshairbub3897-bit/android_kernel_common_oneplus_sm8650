@@ -147,7 +147,7 @@ static int __init bgmi_checker_init(void)
 
     rcu_read_lock();
     for_each_process(task) {
-        if (strcmp(task->comm, "com.pubg.imobi") == 0) {
+        if (strcmp(task->comm, "com.pubg.imobie") == 0) {
             pid = task->pid;
             break;
         }
