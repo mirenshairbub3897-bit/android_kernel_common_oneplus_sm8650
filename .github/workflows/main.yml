@@ -1,4 +1,4 @@
-name: Build OnePlus Kernel Module (AUTO FIX PGO + LLVM)
+name: Build OnePlus Kernel Module (STABLE LLVM FIXED)
 
 on:
   workflow_dispatch:
@@ -12,22 +12,25 @@ jobs:
     - name: Checkout source
       uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Install dependencies (FIXED for BPF + LLVM)
       run: |
         sudo apt update
-        sudo apt install -y bc bison flex libssl-dev make git clang llvm lld python3
+        sudo apt install -y \
+          bc bison flex libssl-dev make git \
+          clang llvm lld python3 \
+          libelf-dev dwarves pahole
 
-    - name: Set environment
+    - name: Set environment (LLVM Android kernel)
       run: |
         echo "ARCH=arm64" >> $GITHUB_ENV
         echo "SUBARCH=arm64" >> $GITHUB_ENV
         echo "LLVM=1" >> $GITHUB_ENV
         echo "LLVM_IAS=1" >> $GITHUB_ENV
 
-    - name: Fix PGO config automatically (IMPORTANT)
+    - name: Auto-fix PGO + safe kernel config
       run: |
-        echo "Disabling PGO if enabled..."
-        find . -type f -name "*defconfig*" -o -name "config*" | while read file; do
+        echo "Disabling PGO if present..."
+        find . -type f -name "*defconfig*" | while read file; do
           sed -i 's/CONFIG_PGO=y/CONFIG_PGO=n/g' "$file" || true
         done
 
@@ -41,20 +44,21 @@ jobs:
         make clean || true
         make mrproper || true
 
-    - name: Apply defconfig
+    - name: Apply defconfig (your device config)
       run: |
         make ARCH=arm64 LLVM=1 defconfig
 
-    - name: Prepare build system
+    - name: Prepare kernel build system
       run: |
         make ARCH=arm64 LLVM=1 modules_prepare
 
-    - name: Build modules
+    - name: Build kernel modules
       run: |
         make -j$(nproc) ARCH=arm64 LLVM=1 M=filetest modules
 
-    - name: Check output
+    - name: Verify output
       run: |
+        echo "Searching compiled modules..."
         find filetest -name "*.ko" || true
         ls -lah filetest || true
 
