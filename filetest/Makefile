@@ -1,4 +1,4 @@
-obj-m += hello.o
+obj-m += bgmi_offset_checker.o
 
 KDIR := $(shell pwd)/..
 
