@@ -1,85 +1,65 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/sched/signal.h> // for_each_process के लिए
 #include <linux/sched.h>
 #include <linux/mm.h>
-#include <linux/fs.h>
-#include <linux/dcache.h>
-#include <linux/version.h>
 
-static int __init hunter_init(void) {
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Auto_PID_Finder");
+
+static int __init auto_test_init(void) {
     struct task_struct *task;
+    struct mm_struct *mm;
     struct vm_area_struct *vma;
     int found_pid = 0;
-    unsigned long base_addr = 0;
 
-    printk(KERN_INFO "========================================\n");
-    printk(KERN_INFO "[+] BGMI Hunter Loaded. Scanning...\n");
+    printk(KERN_INFO "[AutoTest] Looking for BGMI process... \n");
 
+    // 1. कर्नल की पूरी प्रोसेस लिस्ट में गेम को ऑटो-स्कैन करना
     rcu_read_lock();
-
-    // 1. Har process ko loop karo
     for_each_process(task) {
-        // 2. Agar process name mein pubg/bgmi hai toh pakdo
-        if (strstr(task->comm, "pubg") || strstr(task->comm, "bgmi") || 
-            strstr(task->comm, "com.pubg")) {
-
+        // गेम का नाम या पैकेज पहचानना
+        if (task->comm && (strstr(task->comm, "pubg.imobile") || strstr(task->comm, "UE4"))) {
             found_pid = task->pid;
-            printk(KERN_INFO "[+] PID MIL GAYA: %d\n", found_pid);
+            printk(KERN_INFO "[AutoTest] BGMI Auto-Found! Current PID = %d\n", found_pid);
+            break; 
+        }
+    }
+    rcu_read_unlock();
 
-            // 3. Memory map check karo
-            if (task->mm) {
-                // Lock lelo (kernel version ke hisaab se)
-                #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
-                    mmap_read_lock(task->mm);
-                #else
-                    down_read(&task->mm->mmap_sem);
-                #endif
+    if (found_pid == 0) {
+        printk(KERN_ERR "[AutoTest] Error: BGMI is not running right now!\n");
+        return -ESRCH; 
+    }
 
-                // 4. VMA list traverse karo (yahan `mmap` aur `vm_next` standard hai)
-                for (vma = task->mm->mmap; vma; vma = vma->vm_next) {
-                    if (vma->vm_file && vma->vm_file->f_path.dentry) {
-                        // FIX: const unsigned char* use karo, char* nahi
-                        const unsigned char *name = vma->vm_file->f_path.dentry->d_name.name;
-                        
-                        if (strstr(name, "libUE4.so")) {
-                            base_addr = vma->vm_start;
-                            printk(KERN_INFO "[+] libUE4.so BASE ADDRESS: 0x%lx\n", base_addr);
-                            break;
-                        }
-                    }
-                }
+    // 2. ऑटोमेटिक मिले PID की मेमोरी मैप्स में जाना
+    mm = get_task_mm(task);
+    if (!mm) {
+        printk(KERN_ERR "[AutoTest] Error: Failed to access mm_struct (Memory map locked).\n");
+        return -EINVAL;
+    }
 
-                #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
-                    mmap_read_unlock(task->mm);
-                #else
-                    up_read(&task->mm->mmap_sem);
-                #endif
+    // 3. बिना रुके libUE4.so का बेस एड्रेस स्कैन करना
+    VMA_ITERATOR(vmi, mm, 0);
+    for_each_vma(vmi, vma) {
+        if (vma->vm_file) {
+            char *filename = vma->vm_file->f_path.dentry->d_name.name;
+            if (strcmp(filename, "libUE4.so") == 0) {
+                // सीधे कर्नल लॉग्स में बेस एड्रेस भेज देना
+                printk(KERN_INFO "[AutoTest] SUCCESS: libUE4.so Base Address = 0x%lx\n", vma->vm_start);
+                break;
             }
-            break; // Process mil gaya, loop se bahar
         }
     }
 
-    rcu_read_unlock();
-
-    // Final report
-    if (!found_pid)
-        printk(KERN_INFO "[-] BGMI Process nahi mila. Game open hai?\n");
-    else if (!base_addr)
-        printk(KERN_INFO "[-] libUE4.so map nahi hui. Game abhi load ho rahi hogi.\n");
-
-    printk(KERN_INFO "[+] Scan Complete! Check dmesg.\n");
-    printk(KERN_INFO "========================================\n");
+    mmput(mm);
     return 0;
 }
 
-static void __exit hunter_exit(void) {
-    printk(KERN_INFO "[+] Hunter Unloaded.\n");
+static void __exit auto_test_exit(void) {
+    printk(KERN_INFO "[AutoTest] Module Unloaded.\n");
 }
 
-module_init(hunter_init);
-module_exit(hunter_exit);
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Bhai_Research");
-MODULE_DESCRIPTION("PID + Base Address Finder (Fixed)");
+module_init(auto_test_init);
+module_exit(auto_test_exit);
