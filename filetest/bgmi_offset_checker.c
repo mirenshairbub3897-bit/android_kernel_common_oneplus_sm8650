@@ -1,85 +1,86 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/mm.h>
-#include <linux/mm_types.h>
 #include <linux/fs.h>
 #include <linux/dcache.h>
-#include <linux/string.h>
+#include <linux/version.h>
 
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("debug");
-MODULE_DESCRIPTION("libUE4.so VMA base finder");
-
-static pid_t target_pid = 0; // optional: set manually if needed
-
-static void scan_process_vma(struct task_struct *task)
-{
-    struct mm_struct *mm;
-    struct vm_area_struct *vma;
-
-    mm = task->mm;
-    if (!mm)
-        return;
-
-    printk(KERN_INFO "[VMA] Scanning PID: %d NAME: %s\n",
-           task->pid, task->comm);
-
-    for (vma = mm->mmap; vma; vma = vma->vm_next) {
-
-        if (vma->vm_file) {
-            char buf[256];
-            char *name;
-
-            name = d_path(&vma->vm_file->f_path, buf, sizeof(buf));
-
-            if (!IS_ERR(name)) {
-
-                // match libUE4.so
-                if (strstr(name, "libUE4.so")) {
-
-                    printk(KERN_INFO "[FOUND] libUE4.so\n");
-                    printk(KERN_INFO "[BASE] PID: %d NAME: %s\n",
-                           task->pid,
-                           task->comm);
-
-                    printk(KERN_INFO "[ADDR] vm_start = 0x%lx vm_end = 0x%lx\n",
-                           vma->vm_start,
-                           vma->vm_end);
-                }
-            }
-        }
-    }
-}
-
-static int __init vma_init(void)
-{
+static int __init hunter_init(void) {
     struct task_struct *task;
+    struct vm_area_struct *vma;
+    int found_pid = 0;
+    unsigned long base_addr = 0;
 
-    printk(KERN_INFO "[INIT] Starting VMA scan...\n");
+    // Kernel log mein print hoga (JHA SE RUN KARE, WAHI PE LOG)
+    printk(KERN_INFO "========================================\n");
+    printk(KERN_INFO "Kernel Hunter: BGMI Scan Start Kar Raha Hu...\n");
 
+    // RCU lock safe traversal ke liye
+    rcu_read_lock();
+    
+    // 1. Saare processes loop karo
     for_each_process(task) {
+        // Agar process name mein "pubg" ya "bgmi" hai toh pakdo
+        if (strstr(task->comm, "pubg") || strstr(task->comm, "bgmi") || 
+            strstr(task->comm, "com.pubg")) {
+            
+            found_pid = task->pid;
+            printk(KERN_INFO "[+] BGMI Process Mil Gaya! PID: %d\n", found_pid);
+            
+            // 2. Ab is process ka memory map (VMA) check karo
+            if (task->mm) {
+                // Kernel version ke hisaab se lock function (5.8+ ka alag hai)
+                #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+                    mmap_read_lock(task->mm);
+                #else
+                    down_read(&task->mm->mmap_sem);
+                #endif
 
-        // OPTIONAL FILTER (reduce noise)
-        if (strstr(task->comm, "bgmi") ||
-            strstr(task->comm, "pubg") ||
-            strstr(task->comm, "imobile") ||
-            strstr(task->comm, "ue4") ||
-            target_pid == task->pid) {
+                // Har VMA (memory region) loop karo
+                for (vma = task->mm->mmap; vma; vma = vma->vm_next) {
+                    if (vma->vm_file && vma->vm_file->f_path.dentry) {
+                        char *name = vma->vm_file->f_path.dentry->d_name.name;
+                        // Agar region ka naam libUE4.so hai toh base address yehi hai
+                        if (strstr(name, "libUE4.so")) {
+                            base_addr = vma->vm_start;
+                            printk(KERN_INFO "[+] libUE4.so Base Address: 0x%lx\n", base_addr);
+                            break;
+                        }
+                    }
+                }
 
-            scan_process_vma(task);
+                #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
+                    mmap_read_unlock(task->mm);
+                #else
+                    up_read(&task->mm->mmap_sem);
+                #endif
+            }
+            break; // Mil gaya toh loop se bahar
         }
     }
+    rcu_read_unlock();
 
-    printk(KERN_INFO "[DONE] Scan complete\n");
+    // Agar nahi mila toh log bhejo
+    if (!found_pid) {
+        printk(KERN_INFO "[-] BGMI Process Nahi Mila. Game Open Hai?\n");
+    } else if (!base_addr) {
+        printk(KERN_INFO "[-] libUE4.so Map Nahi Hui. Shayad Game Load ho rahi hai.\n");
+    }
+
+    printk(KERN_INFO "Kernel Hunter: Scan Complete!\n");
+    printk(KERN_INFO "========================================\n");
     return 0;
 }
 
-static void __exit vma_exit(void)
-{
-    printk(KERN_INFO "[EXIT] Module removed\n");
+static void __exit hunter_exit(void) {
+    printk(KERN_INFO "Kernel Hunter: Module Unload Ho Gaya.\n");
 }
 
-module_init(vma_init);
-module_exit(vma_exit);
+module_init(hunter_init);
+module_exit(hunter_exit);
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Bhai_Security_Research");
+MODULE_DESCRIPTION("Sirf PID aur Base Address dhoondne wala module (Educational)");
