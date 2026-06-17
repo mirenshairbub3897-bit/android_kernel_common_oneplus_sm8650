@@ -1,9 +1,12 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/sched/signal.h> // for_each_process के लिए
+#include <linux/sched/signal.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
+#include <linux/fs.h>
+#include <linux/dcache.h>
+#include <linux/string.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Auto_PID_Finder");
@@ -19,8 +22,8 @@ static int __init auto_test_init(void) {
     // 1. कर्नल की पूरी प्रोसेस लिस्ट में गेम को ऑटो-स्कैन करना
     rcu_read_lock();
     for_each_process(task) {
-        // गेम का नाम या पैकेज पहचानना
-        if (task->comm && (strstr(task->comm, "pubg.imobile") || strstr(task->comm, "UE4"))) {
+        // फिक्स 1: 'task->comm' एरे एड्रेस चेक हटा दिया, सीधे strstr का उपयोग किया
+        if (strstr(task->comm, "pubg.imobile") || strstr(task->comm, "UE4")) {
             found_pid = task->pid;
             printk(KERN_INFO "[AutoTest] BGMI Auto-Found! Current PID = %d\n", found_pid);
             break; 
@@ -44,7 +47,8 @@ static int __init auto_test_init(void) {
     VMA_ITERATOR(vmi, mm, 0);
     for_each_vma(vmi, vma) {
         if (vma->vm_file) {
-            char *filename = vma->vm_file->f_path.dentry->d_name.name;
+            // फिक्स 2: 'const char *' का उपयोग किया ताकि टाइप मिसमैच न हो
+            const char *filename = (const char *)vma->vm_file->f_path.dentry->d_name.name;
             if (strcmp(filename, "libUE4.so") == 0) {
                 // सीधे कर्नल लॉग्स में बेस एड्रेस भेज देना
                 printk(KERN_INFO "[AutoTest] SUCCESS: libUE4.so Base Address = 0x%lx\n", vma->vm_start);
