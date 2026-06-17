@@ -12,7 +12,7 @@
 #include <linux/delay.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kernel_SDK_Ultimate_Tracker");
+MODULE_AUTHOR("Kernel_SDK_Ultimate_Tracker_Fixed");
 
 // आपके SDK डेटा के अनुसार बिल्कुल सटीक और लाइव लॉक्ड ऑफसेट्स
 #define GWORLD_OFFSET               0xe4f28c0
@@ -90,16 +90,16 @@ static int live_scan_worker(void *data) {
             // 3. GWorld -> PersistentLevel (0x30)
             if (absolute_kernel_read(target_mm, gworld_ptr + PERSISTENT_LEVEL_OFFSET, &persistent_level, sizeof(persistent_level)) == 0 && persistent_level != 0) {
                 
-                // 4. PersistentLevel -> ActorCluster (0xe0) [नया कंटेनर बाईपास]
+                // 4. PersistentLevel -> ActorCluster (0xe0)
                 if (absolute_kernel_read(target_mm, persistent_level + ACTOR_CLUSTER_OFFSET, &actor_cluster, sizeof(actor_cluster)) == 0 && actor_cluster != 0) {
                     
-                    // 5. ActorCluster -> Actors Count (0x30) और Actors Array (0x28)
-                    if (absolute_kernel_read(target_mm, actor_cluster + REAL_ACTOR_COUNT, &actor_count, sizeof(actor_count)) == 0 && actor_count > 0) {
+                    // 5. ActorCluster -> Actors Count (0x30) - फिक्स किया गया नाम
+                    if (absolute_kernel_read(target_mm, actor_cluster + REAL_ACTOR_COUNT_OFFSET, &actor_count, sizeof(actor_count)) == 0 && actor_count > 0) {
                         absolute_kernel_read(target_mm, actor_cluster + REAL_ACTOR_ARRAY_OFFSET, &actor_array, sizeof(actor_array));
                         
                         printk(KERN_INFO "[LiveThread] [SDK-LOCKED] SUCCESS! Objects in Match = %d\n", actor_count);
 
-                        // ट्रेनिंग मोड की उन 4 डमीज़ को लाइव ट्रैक करने के लिए (पहले 10 एक्टर्स स्ट्रीम करेंगे)
+                        // ट्रेनिंग मोड की उन डमीज़ को लाइव ट्रैक करने के लिए
                         if (actor_count > 10) actor_count = 10;
 
                         for (i = 0; i < actor_count; i++) {
@@ -110,7 +110,6 @@ static int live_scan_worker(void *data) {
                                 unsigned int internal_sdk_id = 0;
                                 absolute_kernel_read(target_mm, current_actor + 0x10, &internal_sdk_id, sizeof(internal_sdk_id));
                                 
-                                // लाइव स्क्रीन स्क्रॉलिंग शुरू होगी
                                 printk(KERN_INFO "[LiveThread] -> Live Object [%d] Addr: 0x%lx | ID: 0x%x\n", i, current_actor, internal_sdk_id);
                             }
                         }
@@ -122,12 +121,6 @@ static int live_scan_worker(void *data) {
         mmput(target_mm);
         msleep(1000); // 1 सेकंड का रियल-टाइम रिफ्रेश रेट
     }
-    return 0;
-}
-
-static int __init verify_init(void) {
-    printk(KERN_INFO "[LiveThread] Loading SDK-Ultimate Tracker Module...\n");
-    live_thread = kthread_run(live_scan_worker, NULL, "bgmi_live_scanner");
     return 0;
 }
 
