@@ -3,21 +3,42 @@
 #include <linux/init.h>
 #include <linux/sched/signal.h>
 #include <linux/sched.h>
-#include <linux/sched/mm.h> // फिक्स 1: kthread_use_mm और kthread_unuse_mm इसी हेडर में होते हैं
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/dcache.h>
 #include <linux/string.h>
-#include <linux/uaccess.h>
+#include <linux/highmem.h> // कर्नल पेज मैपिंग के लिए
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kernel_Verifier");
+MODULE_AUTHOR("Kernel_Verifier_v2");
 
 // आपके द्वारा दिए गए लाइव ऑफसेट्स
 #define GNAME_OFFSET   0xdf74800
 #define GWORLD_OFFSET  0xe4f28c0
 #define VMATRIX_OFFSET 0xe4c9ff0
 #define GUOBJECT_OFFSET 0xe22f8d0
+
+// सेफ कर्नल रीड़िंग फंक्शन (बिना kthread_use_mm के)
+static int safe_read_kernel(struct mm_struct *mm, unsigned long addr, void *buf, int len) {
+    struct page *page = NULL;
+    void *vaddr;
+    int res = -1;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+    res = get_user_pages_remote(mm, addr, 1, FOLL_FORCE, &page, NULL);
+#else
+    res = get_user_pages_remote(mm, addr, 1, FOLL_FORCE, &page, NULL, NULL);
+#endif
+
+    if (res > 0 && page) {
+        vaddr = kmap_atomic(page);
+        memcpy(buf, vaddr + (addr & ~PAGE_MASK), len);
+        kunmap_atomic(vaddr);
+        put_page(page);
+        return 0; // Success
+    }
+    return -1; // Error
+}
 
 static int __init verify_init(void) {
     struct task_struct *task;
@@ -26,7 +47,7 @@ static int __init verify_init(void) {
     int found_pid = 0;
     unsigned long base_addr = 0;
 
-    printk(KERN_INFO "[Verifier] Starting Kernel-Level Verification... \n");
+    printk(KERN_INFO "[Verifier] Starting Universal Kernel-Level Verification... \n");
 
     // 1. गेम का PID ढूंढना
     rcu_read_lock();
@@ -50,7 +71,7 @@ static int __init verify_init(void) {
         return -EINVAL;
     }
 
-    // 3. libUE4.so का变स एड्रेस ढूंढना
+    // 3. libUE4.so का बेस एड्रेस ढूंढना
     VMA_ITERATOR(vmi, mm, 0);
     for_each_vma(vmi, vma) {
         if (vma->vm_file) {
@@ -70,16 +91,13 @@ static int __init verify_init(void) {
 
     printk(KERN_INFO "[Verifier] Target Base Address: 0x%lx\n", base_addr);
 
-    // 4. लाइव मेमोरी वेरिफिकेशन (Safe Memory Reading)
-    // फिक्स 2: <linux/sched/mm.h> जोड़ने के बाद अब ये फंक्शन्स बिना एरर के डिक्लेयर हो जाएंगे
-    kthread_use_mm(mm);
-
+    // 4. लाइव मेमोरी वेरिफिकेशन (Safe & Universal Method)
     unsigned long target_ptr = 0;
-    float matrix_test = {0};
+    float matrix_test[4] = {0};
 
     // क) GWorld वेरिफिकेशन टेस्ट
     unsigned long gworld_addr = base_addr + GWORLD_OFFSET;
-    if (copy_from_user(&target_ptr, (void __user *)gworld_addr, sizeof(target_ptr)) == 0) {
+    if (safe_read_kernel(mm, gworld_addr, &target_ptr, sizeof(target_ptr)) == 0) {
         if (target_ptr != 0 && target_ptr > 0x1000000000) {
             printk(KERN_INFO "[Verifier] GWorld (0x%lx) -> VALID POINTER: 0x%lx [MATCH]\n", gworld_addr, target_ptr);
         } else {
@@ -91,7 +109,7 @@ static int __init verify_init(void) {
 
     // ख) GUObject वेरिफिकेशन टेस्ट
     unsigned long guobject_addr = base_addr + GUOBJECT_OFFSET;
-    if (copy_from_user(&target_ptr, (void __user *)guobject_addr, sizeof(target_ptr)) == 0) {
+    if (safe_read_kernel(mm, guobject_addr, &target_ptr, sizeof(target_ptr)) == 0) {
         if (target_ptr != 0 && target_ptr > 0x1000000000) {
             printk(KERN_INFO "[Verifier] GUObject (0x%lx) -> VALID POINTER: 0x%lx [MATCH]\n", guobject_addr, target_ptr);
         } else {
@@ -101,12 +119,10 @@ static int __init verify_init(void) {
 
     // ग) VMatrix वेरिफिकेशन टेस्ट 
     unsigned long vmatrix_addr = base_addr + VMATRIX_OFFSET;
-    if (copy_from_user(&matrix_test, (void __user *)vmatrix_addr, sizeof(matrix_test)) == 0) {
-        printk(KERN_INFO "[Verifier] VMatrix (0x%lx) Live Values: %f, %f, %f, %f\n", vmatrix_addr, matrix_test, matrix_test, matrix_test, matrix_test);
+    if (safe_read_kernel(mm, vmatrix_addr, &matrix_test, sizeof(matrix_test)) == 0) {
+        printk(KERN_INFO "[Verifier] VMatrix (0x%lx) Live Values: %f, %f, %f, %f\n", vmatrix_addr, matrix_test[0], matrix_test[1], matrix_test[2], matrix_test[3]);
     }
 
-    // फिक्स 3: अनयूज़ फंक्शन को भी स्टैंडर्ड मोड में रीसेट किया
-    kthread_unuse_mm(mm);
     mmput(mm);
     return 0;
 }
