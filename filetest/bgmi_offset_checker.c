@@ -7,10 +7,10 @@
 #include <linux/fs.h>
 #include <linux/dcache.h>
 #include <linux/string.h>
-#include <linux/highmem.h> // कर्नल पेज मैपिंग के लिए
+#include <linux/highmem.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kernel_Verifier_v2");
+MODULE_AUTHOR("Kernel_Verifier_v3");
 
 // आपके द्वारा दिए गए लाइव ऑफसेट्स
 #define GNAME_OFFSET   0xdf74800
@@ -18,17 +18,14 @@ MODULE_AUTHOR("Kernel_Verifier_v2");
 #define VMATRIX_OFFSET 0xe4c9ff0
 #define GUOBJECT_OFFSET 0xe22f8d0
 
-// सेफ कर्नल रीड़िंग फंक्शन (बिना kthread_use_mm के)
+// मॉडर्न Android 16 (Linux 6.x+) कर्नल के लिए यूनिवर्सल सेफ रीड फंक्शन
 static int safe_read_kernel(struct mm_struct *mm, unsigned long addr, void *buf, int len) {
     struct page *page = NULL;
     void *vaddr;
     int res = -1;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 5, 0)
+    // मॉडर्न कर्नल्स में get_user_pages_remote के 6 पैरामीटर्स होते हैं
     res = get_user_pages_remote(mm, addr, 1, FOLL_FORCE, &page, NULL);
-#else
-    res = get_user_pages_remote(mm, addr, 1, FOLL_FORCE, &page, NULL, NULL);
-#endif
 
     if (res > 0 && page) {
         vaddr = kmap_atomic(page);
@@ -47,7 +44,7 @@ static int __init verify_init(void) {
     int found_pid = 0;
     unsigned long base_addr = 0;
 
-    printk(KERN_INFO "[Verifier] Starting Universal Kernel-Level Verification... \n");
+    printk(KERN_INFO "[Verifier] Starting Modern Kernel-Level Verification... \n");
 
     // 1. गेम का PID ढूंढना
     rcu_read_lock();
@@ -91,9 +88,9 @@ static int __init verify_init(void) {
 
     printk(KERN_INFO "[Verifier] Target Base Address: 0x%lx\n", base_addr);
 
-    // 4. लाइव मेमोरी वेरिफिकेशन (Safe & Universal Method)
+    // 4. लाइव मेमोरी वेरिफिकेशन (Safe Remote Reading)
     unsigned long target_ptr = 0;
-    float matrix_test[4] = {0};
+    float matrix_test[4] = {0}; // सरणी (Array) के रूप में फिक्स किया गया
 
     // क) GWorld वेरिफिकेशन टेस्ट
     unsigned long gworld_addr = base_addr + GWORLD_OFFSET;
