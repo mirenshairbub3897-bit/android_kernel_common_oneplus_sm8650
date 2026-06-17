@@ -10,7 +10,7 @@
 #include <linux/file.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kernel_Verifier_V5");
+MODULE_AUTHOR("Kernel_Verifier_V5_Fixed");
 
 #define GNAME_OFFSET   0xdf74800
 #define GWORLD_OFFSET  0xe4f28c0
@@ -38,7 +38,6 @@ static int direct_kernel_read(int pid, unsigned long addr, void *buf, int len) {
 
 static int __init verify_init(void) {
     struct task_struct *task;
-    struct mm_struct *mm;
     struct vm_area_struct *vma;
     int found_pid = 0;
     unsigned long base_addr = 0;
