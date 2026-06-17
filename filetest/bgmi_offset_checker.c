@@ -3,17 +3,17 @@
 #include <linux/init.h>
 #include <linux/sched/signal.h>
 #include <linux/sched.h>
+#include <linux/sched/mm.h> // फिक्स 1: kthread_use_mm और kthread_unuse_mm इसी हेडर में होते हैं
 #include <linux/mm.h>
 #include <linux/fs.h>
 #include <linux/dcache.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
-#include <linux/kthread.h> // फिक्स 1: kthread फंक्शन्स के लिए हेडर फाइल जोड़ी
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Kernel_Verifier");
 
-// लाइव ऑफसेट्स
+// आपके द्वारा दिए गए लाइव ऑफसेट्स
 #define GNAME_OFFSET   0xdf74800
 #define GWORLD_OFFSET  0xe4f28c0
 #define VMATRIX_OFFSET 0xe4c9ff0
@@ -50,7 +50,7 @@ static int __init verify_init(void) {
         return -EINVAL;
     }
 
-    // 3. libUE4.so का बेस एड्रेस ढूंढना
+    // 3. libUE4.so का变स एड्रेस ढूंढना
     VMA_ITERATOR(vmi, mm, 0);
     for_each_vma(vmi, vma) {
         if (vma->vm_file) {
@@ -71,11 +71,11 @@ static int __init verify_init(void) {
     printk(KERN_INFO "[Verifier] Target Base Address: 0x%lx\n", base_addr);
 
     // 4. लाइव मेमोरी वेरिफिकेशन (Safe Memory Reading)
-    // फिक्स 2: नए कर्नल (Android 16 / Linux 6.x) के अनुकूल फंक्शन्स का उपयोग किया
-    kthread_use_mm_context(mm);
+    // फिक्स 2: <linux/sched/mm.h> जोड़ने के बाद अब ये फंक्शन्स बिना एरर के डिक्लेयर हो जाएंगे
+    kthread_use_mm(mm);
 
     unsigned long target_ptr = 0;
-    float matrix_test[4] = {0};
+    float matrix_test = {0};
 
     // क) GWorld वेरिफिकेशन टेस्ट
     unsigned long gworld_addr = base_addr + GWORLD_OFFSET;
@@ -102,11 +102,11 @@ static int __init verify_init(void) {
     // ग) VMatrix वेरिफिकेशन टेस्ट 
     unsigned long vmatrix_addr = base_addr + VMATRIX_OFFSET;
     if (copy_from_user(&matrix_test, (void __user *)vmatrix_addr, sizeof(matrix_test)) == 0) {
-        printk(KERN_INFO "[Verifier] VMatrix (0x%lx) Live Values: %f, %f, %f, %f\n", vmatrix_addr, matrix_test[0], matrix_test[1], matrix_test[2], matrix_test[3]);
+        printk(KERN_INFO "[Verifier] VMatrix (0x%lx) Live Values: %f, %f, %f, %f\n", vmatrix_addr, matrix_test, matrix_test, matrix_test, matrix_test);
     }
 
-    // फिक्स 3: unuse_mm को भी नए वर्जन में अपडेट किया
-    kthread_unuse_mm_context(mm);
+    // फिक्स 3: अनयूज़ फंक्शन को भी स्टैंडर्ड मोड में रीसेट किया
+    kthread_unuse_mm(mm);
     mmput(mm);
     return 0;
 }
