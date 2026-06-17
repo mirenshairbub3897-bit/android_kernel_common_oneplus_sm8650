@@ -12,7 +12,7 @@
 #include <linux/delay.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kernel_SDK_Ultimate_Tracker_Fixed");
+MODULE_AUTHOR("Kernel_SDK_Ultimate_Tracker_Final_Fixed");
 
 // आपके SDK डेटा के अनुसार बिल्कुल सटीक और लाइव लॉक्ड ऑफसेट्स
 #define GWORLD_OFFSET               0xe4f28c0
@@ -93,7 +93,7 @@ static int live_scan_worker(void *data) {
                 // 4. PersistentLevel -> ActorCluster (0xe0)
                 if (absolute_kernel_read(target_mm, persistent_level + ACTOR_CLUSTER_OFFSET, &actor_cluster, sizeof(actor_cluster)) == 0 && actor_cluster != 0) {
                     
-                    // 5. ActorCluster -> Actors Count (0x30) - फिक्स किया गया नाम
+                    // 5. ActorCluster -> Actors Count (0x30)
                     if (absolute_kernel_read(target_mm, actor_cluster + REAL_ACTOR_COUNT_OFFSET, &actor_count, sizeof(actor_count)) == 0 && actor_count > 0) {
                         absolute_kernel_read(target_mm, actor_cluster + REAL_ACTOR_ARRAY_OFFSET, &actor_array, sizeof(actor_array));
                         
@@ -120,6 +120,17 @@ static int live_scan_worker(void *data) {
 
         mmput(target_mm);
         msleep(1000); // 1 सेकंड का रियल-टाइम रिफ्रेश रेट
+    }
+    return 0;
+}
+
+// फिक्स: इनिशियलाइजेशन फंक्शन वापस जोड़ा गया जो थ्रेड को रन करेगा
+static int __init verify_init(void) {
+    printk(KERN_INFO "[LiveThread] Loading SDK-Ultimate Tracker Module...\n");
+    live_thread = kthread_run(live_scan_worker, NULL, "bgmi_live_scanner");
+    if (IS_ERR(live_thread)) {
+        printk(KERN_ERR "[LiveThread] Error: Failed to create kernel thread!\n");
+        return PTR_ERR(live_thread);
     }
     return 0;
 }
