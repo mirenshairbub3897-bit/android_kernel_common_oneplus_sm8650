@@ -10,7 +10,7 @@
 #include <linux/highmem.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kernel_Verifier_v3");
+MODULE_AUTHOR("Kernel_Verifier_Final");
 
 // आपके द्वारा दिए गए लाइव ऑफसेट्स
 #define GNAME_OFFSET   0xdf74800
@@ -18,14 +18,14 @@ MODULE_AUTHOR("Kernel_Verifier_v3");
 #define VMATRIX_OFFSET 0xe4c9ff0
 #define GUOBJECT_OFFSET 0xe22f8d0
 
-// मॉडर्न Android 16 (Linux 6.x+) कर्नल के लिए यूनिवर्सल सेफ रीड फंक्शन
+// आपके कर्नल सोर्स के अनुसार 7 पैरामीटर्स वाला सेफ रीड फंक्शन
 static int safe_read_kernel(struct mm_struct *mm, unsigned long addr, void *buf, int len) {
     struct page *page = NULL;
     void *vaddr;
-    int res = -1;
+    long res = -1;
 
-    // मॉडर्न कर्नल्स में get_user_pages_remote के 6 पैरामीटर्स होते हैं
-    res = get_user_pages_remote(mm, addr, 1, FOLL_FORCE, &page, NULL);
+    // फिक्स: कर्नल हेडर के मुताबिक पूरे 7 आर्गुमेंट्स पास किए (अंतिम दो NULL हैं)
+    res = get_user_pages_remote(mm, addr, 1, FOLL_FORCE, &page, NULL, NULL);
 
     if (res > 0 && page) {
         vaddr = kmap_atomic(page);
@@ -44,7 +44,7 @@ static int __init verify_init(void) {
     int found_pid = 0;
     unsigned long base_addr = 0;
 
-    printk(KERN_INFO "[Verifier] Starting Modern Kernel-Level Verification... \n");
+    printk(KERN_INFO "[Verifier] Starting Accurate Kernel-Level Verification... \n");
 
     // 1. गेम का PID ढूंढना
     rcu_read_lock();
@@ -88,9 +88,9 @@ static int __init verify_init(void) {
 
     printk(KERN_INFO "[Verifier] Target Base Address: 0x%lx\n", base_addr);
 
-    // 4. लाइव मेमोरी वेरिफिकेशन (Safe Remote Reading)
+    // 4. लाइव मेमोरी वेरिफिकेशन
     unsigned long target_ptr = 0;
-    float matrix_test[4] = {0}; // सरणी (Array) के रूप में फिक्स किया गया
+    float matrix_test = 0.0f;
 
     // क) GWorld वेरिफिकेशन टेस्ट
     unsigned long gworld_addr = base_addr + GWORLD_OFFSET;
@@ -117,7 +117,7 @@ static int __init verify_init(void) {
     // ग) VMatrix वेरिफिकेशन टेस्ट 
     unsigned long vmatrix_addr = base_addr + VMATRIX_OFFSET;
     if (safe_read_kernel(mm, vmatrix_addr, &matrix_test, sizeof(matrix_test)) == 0) {
-        printk(KERN_INFO "[Verifier] VMatrix (0x%lx) Live Values: %f, %f, %f, %f\n", vmatrix_addr, matrix_test[0], matrix_test[1], matrix_test[2], matrix_test[3]);
+        printk(KERN_INFO "[Verifier] VMatrix (0x%lx) Live Value: %f\n", vmatrix_addr, matrix_test);
     }
 
     mmput(mm);
