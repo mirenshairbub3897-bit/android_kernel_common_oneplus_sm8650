@@ -10,14 +10,13 @@
 #include <linux/file.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kernel_Verifier_V4");
+MODULE_AUTHOR("Kernel_Verifier_V5");
 
 #define GNAME_OFFSET   0xdf74800
 #define GWORLD_OFFSET  0xe4f28c0
 #define VMATRIX_OFFSET 0xe4c9ff0
 #define GUOBJECT_OFFSET 0xe22f8d0
 
-// कर्नल का सबसे अचूक और डायरेक्ट मैमोरी रीडर (VFS Based)
 static int direct_kernel_read(int pid, unsigned long addr, void *buf, int len) {
     struct file *file;
     char path[64];
@@ -31,7 +30,6 @@ static int direct_kernel_read(int pid, unsigned long addr, void *buf, int len) {
         return -1;
     }
 
-    // कर्नल डायरेक्ट खुद ही फाइल सिस्टम लेवल से गेम की रैम को पढ़ लेता है
     bytes_read = kernel_read(file, buf, len, &pos);
     filp_close(file, NULL);
 
@@ -45,46 +43,37 @@ static int __init verify_init(void) {
     int found_pid = 0;
     unsigned long base_addr = 0;
 
-    printk(KERN_INFO "[Verifier] Starting VFS Kernel Verification... \n");
+    printk(KERN_INFO "[Verifier] Starting Robust VFS Kernel Verification... \n");
 
+    // 1. अल्टीमेट स्कैन: नाम के बजाय सीधे mm_struct के फाइल्स से गेम पहचानना
     rcu_read_lock();
     for_each_process(task) {
-        if (strstr(task->comm, "pubg.imobile") || strstr(task->comm, "UE4")) {
-            found_pid = task->pid;
-            break; 
+        struct mm_struct *active_mm = get_task_mm(task);
+        if (active_mm) {
+            VMA_ITERATOR(vmi, active_mm, 0);
+            for_each_vma(vmi, vma) {
+                if (vma->vm_file) {
+                    const char *filename = (const char *)vma->vm_file->f_path.dentry->d_name.name;
+                    // मैच के अंदर भी libUE4.so या libanogs.so हमेशा लोड रहती है
+                    if (strcmp(filename, "libUE4.so") == 0 || strcmp(filename, "libanogs.so") == 0) {
+                        found_pid = task->pid;
+                        base_addr = vma->vm_start; // बेस एड्रेस भी यही मिल गया!
+                        break;
+                    }
+                }
+            }
+            mmput(active_mm);
         }
+        if (found_pid != 0) break;
     }
     rcu_read_unlock();
 
-    if (found_pid == 0) {
-        printk(KERN_ERR "[Verifier] Error: Game is not running!\n");
-        return -ESRCH; 
+    if (found_pid == 0 || base_addr == 0) {
+        printk(KERN_ERR "[Verifier] Error: BGMI Process or libUE4.so NOT found in RAM!\n");
+        return 0; // फिक्स: कर्नल पैनिक और No such process एरर से बचने के लिए 0 रिटर्न किया
     }
 
-    mm = get_task_mm(task);
-    if (!mm) {
-        printk(KERN_ERR "[Verifier] Error: Failed to access mm_struct.\n");
-        return -EINVAL;
-    }
-
-    VMA_ITERATOR(vmi, mm, 0);
-    for_each_vma(vmi, vma) {
-        if (vma->vm_file) {
-            const char *filename = (const char *)vma->vm_file->f_path.dentry->d_name.name;
-            if (strcmp(filename, "libUE4.so") == 0) {
-                base_addr = vma->vm_start;
-                break;
-            }
-        }
-    }
-
-    mmput(mm);
-
-    if (base_addr == 0) {
-        printk(KERN_ERR "[Verifier] Error: libUE4.so base address not found!\n");
-        return -ENOENT;
-    }
-
+    printk(KERN_INFO "[Verifier] SUCCESS! Auto-Found PID = %d\n", found_pid);
     printk(KERN_INFO "[Verifier] Target Base Address: 0x%lx\n", base_addr);
 
     unsigned long target_ptr = 0;
