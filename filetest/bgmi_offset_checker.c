@@ -7,12 +7,13 @@
 #include <linux/fs.h>
 #include <linux/dcache.h>
 #include <linux/string.h>
-#include <linux/uaccess.h> // copy_from_user / access_ok के लिए
+#include <linux/uaccess.h>
+#include <linux/kthread.h> // फिक्स 1: kthread फंक्शन्स के लिए हेडर फाइल जोड़ी
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Kernel_Verifier");
 
-// आपके द्वारा दिए गए लाइव ऑफसेट्स
+// लाइव ऑफसेट्स
 #define GNAME_OFFSET   0xdf74800
 #define GWORLD_OFFSET  0xe4f28c0
 #define VMATRIX_OFFSET 0xe4c9ff0
@@ -70,8 +71,8 @@ static int __init verify_init(void) {
     printk(KERN_INFO "[Verifier] Target Base Address: 0x%lx\n", base_addr);
 
     // 4. लाइव मेमोरी वेरिफिकेशन (Safe Memory Reading)
-    // कर्नल स्पेस से गेम की यूजरस्पेस मेमोरी सुरक्षित पढ़ने के लिए kthread_use_mm का उपयोग किया जाता है
-    kthread_use_mm(mm);
+    // फिक्स 2: नए कर्नल (Android 16 / Linux 6.x) के अनुकूल फंक्शन्स का उपयोग किया
+    kthread_use_mm_context(mm);
 
     unsigned long target_ptr = 0;
     float matrix_test[4] = {0};
@@ -98,13 +99,14 @@ static int __init verify_init(void) {
         }
     }
 
-    // ग) VMatrix वेरिफिकेशन टेस्ट (Matrix में आमतौर पर 0 और 1 के फ्लोट नंबर्स होते हैं)
+    // ग) VMatrix वेरिफिकेशन टेस्ट 
     unsigned long vmatrix_addr = base_addr + VMATRIX_OFFSET;
     if (copy_from_user(&matrix_test, (void __user *)vmatrix_addr, sizeof(matrix_test)) == 0) {
         printk(KERN_INFO "[Verifier] VMatrix (0x%lx) Live Values: %f, %f, %f, %f\n", vmatrix_addr, matrix_test[0], matrix_test[1], matrix_test[2], matrix_test[3]);
     }
 
-    kthread_unuse_mm(mm);
+    // फिक्स 3: unuse_mm को भी नए वर्जन में अपडेट किया
+    kthread_unuse_mm_context(mm);
     mmput(mm);
     return 0;
 }
