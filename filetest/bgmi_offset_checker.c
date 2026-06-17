@@ -12,16 +12,14 @@
 #include <linux/delay.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Kernel_SDK_Verified_Tracker");
+MODULE_AUTHOR("Kernel_SDK_Ultimate_Tracker");
 
-// आपके SDK डेटा के अनुसार बिल्कुल सटीक और फिक्स ऑफसेट्स
-#define GWORLD_OFFSET            0xe4f28c0
-#define PERSISTENT_LEVEL_OFFSET  0x30   // SDK: Level* PersistentLevel [Offset: 0x30]
-#define LEVELS_ARRAY_OFFSET      0x440  // SDK: Level*[] Levels [Offset: 0x440]
-
-// Unreal Engine Standard internal array offsets for Level
-#define UNREAL_ACTOR_ARRAY       0x98   
-#define UNREAL_ACTOR_COUNT       0xa0   
+// आपके SDK डेटा के अनुसार बिल्कुल सटीक और लाइव लॉक्ड ऑफसेट्स
+#define GWORLD_OFFSET               0xe4f28c0
+#define PERSISTENT_LEVEL_OFFSET     0x30   // SDK: Level* PersistentLevel [Offset: 0x30]
+#define ACTOR_CLUSTER_OFFSET        0xe0   // SDK: LevelActorContainer* ActorCluster [Offset: 0xe0]
+#define REAL_ACTOR_ARRAY_OFFSET     0x28   // SDK: Actor*[] Actors [Offset: 0x28]
+#define REAL_ACTOR_COUNT_OFFSET     0x30   // TArray Count is always ArrayOffset + 8 (0x28 + 0x8 = 0x30)
 
 static struct task_struct *live_thread = NULL;
 
@@ -42,7 +40,7 @@ static int absolute_kernel_read(struct mm_struct *mm, unsigned long addr, void *
 }
 
 static int live_scan_worker(void *data) {
-    printk(KERN_INFO "[LiveThread] SDK-Verified Tracker Loop Started.\n");
+    printk(KERN_INFO "[LiveThread] Ultimate SDK-Locked Loop Started.\n");
 
     while (!kthread_should_stop()) {
         struct task_struct *task;
@@ -53,11 +51,12 @@ static int live_scan_worker(void *data) {
 
         unsigned long gworld_ptr = 0;
         unsigned long persistent_level = 0;
+        unsigned long actor_cluster = 0;
         unsigned long actor_array = 0;
         int actor_count = 0;
         int i = 0;
 
-        // 1. कर्नल प्रोसेस ट्री से गेम का PID और Base Address निकालना
+        // 1. ऑटोमेटिकली PID और Base Address खोजना
         rcu_read_lock();
         for_each_process(task) {
             struct mm_struct *active_mm = get_task_mm(task);
@@ -88,29 +87,32 @@ static int live_scan_worker(void *data) {
         // 2. GWorld रीड करना
         if (absolute_kernel_read(target_mm, base_addr + GWORLD_OFFSET, &gworld_ptr, sizeof(gworld_ptr)) == 0 && gworld_ptr != 0) {
             
-            // 3. GWorld -> PersistentLevel (0x30) पर जाना
+            // 3. GWorld -> PersistentLevel (0x30)
             if (absolute_kernel_read(target_mm, gworld_ptr + PERSISTENT_LEVEL_OFFSET, &persistent_level, sizeof(persistent_level)) == 0 && persistent_level != 0) {
                 
-                // 4. SDK फिक्स: PersistentLevel के अंदर से सीधे एक्टर्स की संख्या और लिस्ट उठाना
-                if (absolute_kernel_read(target_mm, persistent_level + UNREAL_ACTOR_COUNT, &actor_count, sizeof(actor_count)) == 0 && actor_count > 0) {
-                    absolute_kernel_read(target_mm, persistent_level + UNREAL_ACTOR_ARRAY, &actor_array, sizeof(actor_array));
+                // 4. PersistentLevel -> ActorCluster (0xe0) [नया कंटेनर बाईपास]
+                if (absolute_kernel_read(target_mm, persistent_level + ACTOR_CLUSTER_OFFSET, &actor_cluster, sizeof(actor_cluster)) == 0 && actor_cluster != 0) {
                     
-                    printk(KERN_INFO "[LiveThread] [SDK-MATCH] Total Active Objects in RAM: %d\n", actor_count);
+                    // 5. ActorCluster -> Actors Count (0x30) और Actors Array (0x28)
+                    if (absolute_kernel_read(target_mm, actor_cluster + REAL_ACTOR_COUNT, &actor_count, sizeof(actor_count)) == 0 && actor_count > 0) {
+                        absolute_kernel_read(target_mm, actor_cluster + REAL_ACTOR_ARRAY_OFFSET, &actor_array, sizeof(actor_array));
+                        
+                        printk(KERN_INFO "[LiveThread] [SDK-LOCKED] SUCCESS! Objects in Match = %d\n", actor_count);
 
-                    // ट्रेनिंग ग्राउंड की उन 4 डमीज़ और आपके आसपास के एक्टर्स को लाइव स्ट्रीम करने के लिए (शुरुआती 8 एक्टर्स)
-                    if (actor_count > 8) actor_count = 8;
+                        // ट्रेनिंग मोड की उन 4 डमीज़ को लाइव ट्रैक करने के लिए (पहले 10 एक्टर्स स्ट्रीम करेंगे)
+                        if (actor_count > 10) actor_count = 10;
 
-                    for (i = 0; i < actor_count; i++) {
-                        unsigned long current_actor = 0;
-                        unsigned long actor_ptr_addr = actor_array + (i * 8);
+                        for (i = 0; i < actor_count; i++) {
+                            unsigned long current_actor = 0;
+                            unsigned long actor_ptr_addr = actor_array + (i * 8);
 
-                        if (absolute_kernel_read(target_mm, actor_ptr_addr, &current_actor, sizeof(current_actor)) == 0 && current_actor != 0) {
-                            unsigned int internal_id = 0;
-                            // एक्टर के अंदर का रॉ नाम इंडेक्स (ID) रीड करना
-                            absolute_kernel_read(target_mm, current_actor + 0x10, &internal_id, sizeof(internal_id));
-                            
-                            // कर्नल लॉग में लाइव डेटा बिना रुके बहना शुरू होगा
-                            printk(KERN_INFO "[LiveThread] -> Live Actor [%d] Addr: 0x%lx | SDK-ID: 0x%x\n", i, current_actor, internal_id);
+                            if (absolute_kernel_read(target_mm, actor_ptr_addr, &current_actor, sizeof(current_actor)) == 0 && current_actor != 0) {
+                                unsigned int internal_sdk_id = 0;
+                                absolute_kernel_read(target_mm, current_actor + 0x10, &internal_sdk_id, sizeof(internal_sdk_id));
+                                
+                                // लाइव स्क्रीन स्क्रॉलिंग शुरू होगी
+                                printk(KERN_INFO "[LiveThread] -> Live Object [%d] Addr: 0x%lx | ID: 0x%x\n", i, current_actor, internal_sdk_id);
+                            }
                         }
                     }
                 }
@@ -118,19 +120,19 @@ static int live_scan_worker(void *data) {
         }
 
         mmput(target_mm);
-        msleep(1000); // हर 1 सेकंड में लाइव रिफ्रेश रेट
+        msleep(1000); // 1 सेकंड का रियल-टाइम रिफ्रेश रेट
     }
     return 0;
 }
 
 static int __init verify_init(void) {
-    printk(KERN_INFO "[LiveThread] Loading SDK-Verified Live Tracker Module...\n");
+    printk(KERN_INFO "[LiveThread] Loading SDK-Ultimate Tracker Module...\n");
     live_thread = kthread_run(live_scan_worker, NULL, "bgmi_live_scanner");
     return 0;
 }
 
 static void __exit verify_exit(void) {
-    printk(KERN_INFO "[LiveThread] Stopping SDK-Verified Live Tracker Module...\n");
+    printk(KERN_INFO "[LiveThread] Stopping SDK-Ultimate Tracker Module...\n");
     if (live_thread) kthread_stop(live_thread);
 }
 
