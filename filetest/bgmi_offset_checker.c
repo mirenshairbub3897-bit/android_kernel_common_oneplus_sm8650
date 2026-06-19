@@ -5,10 +5,8 @@
  *   make -C /path/to/kernel/out M=$(pwd) ARCH=arm64 LLVM=1 modules
  *
  * Usage:
- *   insmod bgmi_offset_checker.ko pid=12345    (replace with BGMI PID)
+ *   insmod bgmi_offset_checker.ko pid=$(pidof com.pubg.imobile)
  *   dmesg | tail -n 100
- *
- * To unload (the module will auto‑remove itself after test):
  *   rmmod bgmi_offset_checker
  */
 
@@ -23,7 +21,6 @@
 #include <linux/fs.h>
 #include <linux/dcache.h>
 #include <linux/version.h>
-#include <linux/completion.h>
 #include <linux/delay.h>
 #include <linux/proc_fs.h>
 #include <linux/mmap_lock.h>
@@ -86,12 +83,12 @@ static int target_pid = 0;
 module_param_named(pid, target_pid, int, 0);
 MODULE_PARM_DESC(pid, "PID of BGMI process");
 
-/* ---------- read remote memory ---------- */
+/* ---------- read remote process memory ---------- */
 static int read_remote_mem(pid_t pid, unsigned long addr, void *buf, size_t len)
 {
     struct task_struct *task;
     struct mm_struct *mm;
-    int ret = 0;
+    int ret;
 
     rcu_read_lock();
     task = find_task_by_vpid(pid);
@@ -124,10 +121,8 @@ static int read_ptr_remote(pid_t pid, unsigned long addr, unsigned long *out)
 static unsigned long get_library_base(pid_t pid, const char *lib_name)
 {
     struct task_struct *task;
-    struct mm_struct *mm;
-    struct vm_area_struct *vma;
+    struct mm_struct *mm = NULL;   /* explicit initialization */
     unsigned long base = 0;
-    VMA_ITERATOR(vmi, mm, 0);
 
     rcu_read_lock();
     task = find_task_by_vpid(pid);
@@ -140,16 +135,22 @@ static unsigned long get_library_base(pid_t pid, const char *lib_name)
 
     mm = get_task_mm(task);
     put_task_struct(task);
-    if (!mm) return 0;
+    if (!mm)
+        return 0;
 
     mmap_read_lock(mm);
-    for_each_vma(vmi, vma) {
-        struct file *file = vma->vm_file;
-        if (!file) continue;
-        const char *name = file->f_path.dentry->d_name.name;
-        if (name && strstr(name, lib_name)) {
-            base = vma->vm_start;
-            break;
+    {
+        VMA_ITERATOR(vmi, mm, 0);
+        struct vm_area_struct *vma;
+        for_each_vma(vmi, vma) {
+            struct file *file = vma->vm_file;
+            if (!file)
+                continue;
+            const char *name = file->f_path.dentry->d_name.name;
+            if (name && strstr(name, lib_name)) {
+                base = vma->vm_start;
+                break;
+            }
         }
     }
     mmap_read_unlock(mm);
@@ -157,14 +158,21 @@ static unsigned long get_library_base(pid_t pid, const char *lib_name)
     return base;
 }
 
-/* ---------- test functions ---------- */
+/* ---------- test function ---------- */
 static int __init test_offsets(void)
 {
     unsigned long libbase;
-    int ret;
+    unsigned long gworld_ptr_addr, gworld, level, gameinst;
+    unsigned long lp_data, localplayer, playerctrl, pawn;
+    int lp_count;
+    unsigned long rootcomp, mesh, bone_data, playerstate;
+    float loc[3], submit_t, render_t, ctw_loc[3];
+    int team;
+    float hp, maxhp;
+    unsigned long name_data; int name_count, name_max;
 
     if (target_pid <= 0) {
-        pr_err("Invalid or missing PID. Please supply with 'pid=...'\n");
+        pr_err("Invalid or missing PID. Use insmod bgmi_offset_checker.ko pid=...\n");
         return -EINVAL;
     }
     pr_info("BGMI PID = %d\n", target_pid);
@@ -185,7 +193,7 @@ static int __init test_offsets(void)
             {"GetActorArray", OFF_GetActorArray},
             {"GNativeAndroidApp", OFF_GNativeAndroidApp},
         };
-        for (int i=0; i<ARRAY_SIZE(tests); i++) {
+        for (int i = 0; i < ARRAY_SIZE(tests); i++) {
             unsigned long addr = libbase + tests[i].off;
             unsigned long val = 0;
             if (read_ptr_remote(target_pid, addr, &val) == 0)
@@ -197,8 +205,7 @@ static int __init test_offsets(void)
 
     /* Traversal: LocalPlayer */
     pr_info("Traversing LocalPlayer chain...\n");
-    unsigned long gworld_ptr_addr = libbase + OFF_GWorld;
-    unsigned long gworld = 0;
+    gworld_ptr_addr = libbase + OFF_GWorld;
     if (read_ptr_remote(target_pid, gworld_ptr_addr, &gworld) != 0) {
         pr_err("Cannot read GWorld pointer\n");
         goto out;
@@ -209,24 +216,19 @@ static int __init test_offsets(void)
     }
     pr_info("GWorld = 0x%lx\n", gworld);
 
-    // ULevel
-    unsigned long level = 0;
     if (read_ptr_remote(target_pid, gworld + OFF_GWorld_to_PersistentLevel, &level) != 0)
         goto chain_fail;
     pr_info("ULevel = 0x%lx\n", level);
 
-    // GameInstance
-    unsigned long gameinst = 0;
     if (read_ptr_remote(target_pid, level + OFF_ULevel_to_GameInstance, &gameinst) != 0)
         goto chain_fail;
     pr_info("GameInstance = 0x%lx\n", gameinst);
 
-    // LocalPlayers TArray (Data ptr at +0, Count at +4)
-    unsigned long lp_data = 0;
-    int lp_count = 0;
-    if (read_remote_mem(target_pid, gameinst + OFF_GameInstance_to_LocalPlayers, &lp_data, sizeof(lp_data)))
+    if (read_remote_mem(target_pid, gameinst + OFF_GameInstance_to_LocalPlayers,
+                        &lp_data, sizeof(lp_data)))
         goto chain_fail;
-    if (read_remote_mem(target_pid, gameinst + OFF_GameInstance_to_LocalPlayers + 4, &lp_count, sizeof(lp_count)))
+    if (read_remote_mem(target_pid, gameinst + OFF_GameInstance_to_LocalPlayers + 4,
+                        &lp_count, sizeof(lp_count)))
         goto chain_fail;
     pr_info("LocalPlayers.Data = 0x%lx, Count = %d\n", lp_data, lp_count);
     if (lp_count <= 0 || lp_data == 0) {
@@ -234,20 +236,14 @@ static int __init test_offsets(void)
         goto chain_fail;
     }
 
-    // LocalPlayer[0]
-    unsigned long localplayer = 0;
     if (read_ptr_remote(target_pid, lp_data, &localplayer) != 0)
         goto chain_fail;
     pr_info("LocalPlayer[0] = 0x%lx\n", localplayer);
 
-    // PlayerController
-    unsigned long playerctrl = 0;
     if (read_ptr_remote(target_pid, localplayer + OFF_LocalPlayer_to_PlayerController, &playerctrl) != 0)
         goto chain_fail;
     pr_info("PlayerController = 0x%lx\n", playerctrl);
 
-    // AcknowledgedPawn
-    unsigned long pawn = 0;
     if (read_ptr_remote(target_pid, playerctrl + OFF_PlayerController_to_AcknowledgedPawn, &pawn) != 0)
         goto chain_fail;
     pr_info("AcknowledgedPawn = 0x%lx\n", pawn);
@@ -263,64 +259,56 @@ static int __init test_offsets(void)
             pr_info("  PlayerKey = 0x%lx\n", val);
     }
 
-    // RootComponent
-    unsigned long rootcomp = 0;
+    /* RootComponent */
     if (read_ptr_remote(target_pid, pawn + OFF_RootComponent, &rootcomp) == 0 && rootcomp > 0x1000) {
-        float loc[3];
-        if (read_remote_mem(target_pid, rootcomp + OFF_USceneComponent_RelativeLocation, loc, sizeof(loc)) == 0)
+        if (read_remote_mem(target_pid, rootcomp + OFF_USceneComponent_RelativeLocation,
+                            loc, sizeof(loc)) == 0)
             pr_info("  RelativeLocation = (%f, %f, %f)\n", loc[0], loc[1], loc[2]);
     }
 
-    // Mesh
-    unsigned long mesh = 0;
+    /* Mesh */
     if (read_ptr_remote(target_pid, pawn + OFF_ASTExtraPlayerCharacter_to_Mesh, &mesh) == 0 && mesh > 0x1000) {
         pr_info("Mesh = 0x%lx\n", mesh);
-
-        unsigned long bone_data = 0;
         if (read_ptr_remote(target_pid, mesh + OFF_Mesh_to_ComponentSpaceTransforms, &bone_data) == 0) {
             pr_info("  BoneArray.Data = 0x%lx\n", bone_data);
             if (bone_data > 0x1000) {
-                float trans[3];
-                if (read_remote_mem(target_pid, bone_data + OFF_FTransform_Translation, trans, sizeof(trans)) == 0)
-                    pr_info("    Bone[0] Translation = (%f, %f, %f)\n", trans[0], trans[1], trans[2]);
+                if (read_remote_mem(target_pid, bone_data + OFF_FTransform_Translation,
+                                    loc, sizeof(loc)) == 0)
+                    pr_info("    Bone[0] Translation = (%f, %f, %f)\n", loc[0], loc[1], loc[2]);
             }
         }
-
-        float submit_t, render_t;
-        if (read_remote_mem(target_pid, mesh + OFF_UPrimitiveComponent_LastSubmitTime, &submit_t, sizeof(float)) == 0 &&
-            read_remote_mem(target_pid, mesh + OFF_UPrimitiveComponent_LastRenderTime, &render_t, sizeof(float)) == 0)
+        if (read_remote_mem(target_pid, mesh + OFF_UPrimitiveComponent_LastSubmitTime,
+                            &submit_t, sizeof(float)) == 0 &&
+            read_remote_mem(target_pid, mesh + OFF_UPrimitiveComponent_LastRenderTime,
+                            &render_t, sizeof(float)) == 0)
             pr_info("  LastSubmitTime = %f, LastRenderTime = %f\n", submit_t, render_t);
-
-        float ctw_loc[3];
-        if (read_remote_mem(target_pid, mesh + OFF_USceneComponent_ComponentToWorld + OFF_FTransform_Translation, ctw_loc, sizeof(ctw_loc)) == 0)
+        if (read_remote_mem(target_pid, mesh + OFF_USceneComponent_ComponentToWorld +
+                            OFF_FTransform_Translation, ctw_loc, sizeof(ctw_loc)) == 0)
             pr_info("  ComponentToWorld.Translation = (%f, %f, %f)\n", ctw_loc[0], ctw_loc[1], ctw_loc[2]);
     }
 
-    // PlayerState
-    unsigned long playerstate = 0;
-    if (read_ptr_remote(target_pid, pawn + OFF_ASTExtraPlayerCharacter_to_PlayerState, &playerstate) == 0 && playerstate > 0x1000) {
-        int team;
-        float hp, maxhp;
+    /* PlayerState */
+    if (read_ptr_remote(target_pid, pawn + OFF_ASTExtraPlayerCharacter_to_PlayerState, &playerstate) == 0 &&
+        playerstate > 0x1000) {
         read_remote_mem(target_pid, playerstate + OFF_PlayerState_TeamID, &team, sizeof(team));
         read_remote_mem(target_pid, playerstate + OFF_PlayerState_Health, &hp, sizeof(hp));
         read_remote_mem(target_pid, playerstate + OFF_PlayerState_HealthMax, &maxhp, sizeof(maxhp));
         pr_info("PlayerState: TeamID=%d  Health=%.1f/%.1f\n", team, hp, maxhp);
 
-        unsigned long name_data; int name_count, name_max;
         if (read_ptr_remote(target_pid, playerstate + OFF_PlayerState_PlayerName, &name_data) == 0) {
-            read_remote_mem(target_pid, playerstate + OFF_PlayerState_PlayerName + 8, &name_count, sizeof(name_count));
-            read_remote_mem(target_pid, playerstate + OFF_PlayerState_PlayerName + 12, &name_max, sizeof(name_max));
+            read_remote_mem(target_pid, playerstate + OFF_PlayerState_PlayerName + 8,
+                            &name_count, sizeof(name_count));
+            read_remote_mem(target_pid, playerstate + OFF_PlayerState_PlayerName + 12,
+                            &name_max, sizeof(name_max));
             pr_info("  PlayerName: Data=0x%lx Count=%d Max=%d\n", name_data, name_count, name_max);
         }
     }
 
-    pr_info("All checks finished. See above for OK/FAIL results.\n");
-
-    /* Returning -EINVAL causes module to unload automatically after test */
-    return -EINVAL;
+    pr_info("All checks finished. Look for [OK]/[FAIL] above.\n");
+    return -EINVAL;   /* auto‑remove module after test */
 
 chain_fail:
-    pr_err("Chain broken – some pointer could not be followed\n");
+    pr_err("Chain broken – a pointer could not be followed\n");
 out:
     return -EFAULT;
 }
